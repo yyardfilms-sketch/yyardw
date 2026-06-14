@@ -166,6 +166,20 @@
     }
     .credit-chip .amount { color: var(--blue); font-weight: 700; }
 
+    /* Future expenses chip */
+    .future-chip {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: rgba(251, 146, 60, 0.12);
+      border: 1px solid rgba(251, 146, 60, 0.3);
+      border-radius: 10px;
+      padding: 10px 14px;
+      margin-bottom: 12px;
+      font-size: 0.85rem;
+    }
+    .future-chip .amount { color: var(--orange); font-weight: 700; }
+
     /* Quick add */
     .quick-add {
       display: grid;
@@ -600,6 +614,10 @@
       <div id="credit-chip" class="credit-chip hidden">
         <span class="right">💳 אשראי שוטף (טרם חויב)</span>
         <span class="amount" id="credit-amount"></span>
+      </div>
+      <div id="future-chip" class="future-chip hidden">
+        <span class="right">🗓 הוצאות עתידיות צפויות</span>
+        <span class="amount" id="future-amount"></span>
       </div>
       <div class="quick-add">
         <button class="quick-btn expense" onclick="openAddModal('expense')">➖ הוצאה</button>
@@ -1060,6 +1078,21 @@ function renderHome() {
     document.getElementById('credit-amount').textContent = formatCurrency(stats.creditPending);
   } else {
     creditChip.classList.add('hidden');
+  }
+
+  var futureExpensesTotal = 0;
+  for (var fi = 0; fi < data.transactions.length; fi++) {
+    var ftx = data.transactions[fi];
+    if (ftx.type === 'future' && ftx.futureType === 'expense' && isInCycle(ftx.date, viewMonth, viewYear)) {
+      futureExpensesTotal += ftx.amount;
+    }
+  }
+  var futureChip = document.getElementById('future-chip');
+  if (futureExpensesTotal > 0) {
+    futureChip.classList.remove('hidden');
+    document.getElementById('future-amount').textContent = formatCurrency(futureExpensesTotal);
+  } else {
+    futureChip.classList.add('hidden');
   }
 
   renderTimeline(stats);
