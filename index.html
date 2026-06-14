@@ -93,7 +93,7 @@
       cursor: pointer;
     }
     .month-nav button:active { transform: scale(0.9); background: var(--bg3); }
-    .month-nav span { font-size: 1rem; font-weight: 600; min-width: 140px; text-align: center; }
+    .month-nav span { font-size: 0.9rem; font-weight: 600; min-width: 200px; text-align: center; line-height: 1.3; }
 
     /* Hero card */
     .hero-card {
@@ -771,6 +771,7 @@
 var MONTHS = ['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
 var DAY_NAMES = ['א׳','ב׳','ג׳','ד׳','ה׳','ו׳','ש׳'];
 var CAT_COLORS = ['#7c6fef','#34d399','#f87171','#60a5fa','#fb923c','#f472b6','#a78bfa','#2dd4bf','#fbbf24','#818cf8'];
+var CYCLE_START_DAY = 10;
 
 var data = {
   transactions: [],
@@ -839,18 +840,76 @@ function monthKey(year, month) {
   return year + '-' + month;
 }
 
-function isInMonth(dateStr, month, year) {
+function parseDateStr(dateStr) {
   var parts = dateStr.split('-');
-  return parseInt(parts[0], 10) === year && parseInt(parts[1], 10) - 1 === month;
+  return new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
+}
+
+function getNextMonthYear(month, year) {
+  var nextMonth = month + 1;
+  var nextYear = year;
+  if (nextMonth > 11) { nextMonth = 0; nextYear++; }
+  return { month: nextMonth, year: nextYear };
+}
+
+function getCycleStartDate(month, year) {
+  return new Date(year, month, CYCLE_START_DAY);
+}
+
+function getCycleEndDate(month, year) {
+  var next = getNextMonthYear(month, year);
+  return new Date(next.year, next.month, 9);
+}
+
+function getCycleForDate(date) {
+  var d = date.getDate();
+  var m = date.getMonth();
+  var y = date.getFullYear();
+  if (d >= CYCLE_START_DAY) {
+    return { month: m, year: y };
+  }
+  if (m === 0) return { month: 11, year: y - 1 };
+  return { month: m - 1, year: y };
+}
+
+function isInCycle(dateStr, month, year) {
+  var txDate = parseDateStr(dateStr);
+  var start = getCycleStartDate(month, year);
+  var end = getCycleEndDate(month, year);
+  return txDate >= start && txDate <= end;
+}
+
+function getCycleDays(month, year) {
+  var days = [];
+  var lastDay = new Date(year, month + 1, 0).getDate();
+  var d;
+  for (d = CYCLE_START_DAY; d <= lastDay; d++) {
+    days.push({ year: year, month: month, day: d });
+  }
+  var next = getNextMonthYear(month, year);
+  for (d = 1; d <= 9; d++) {
+    days.push({ year: next.year, month: next.month, day: d });
+  }
+  return days;
+}
+
+function getCycleLabel(month, year) {
+  var next = getNextMonthYear(month, year);
+  return MONTHS[month] + ' 10 – ' + MONTHS[next.month] + ' 9';
+}
+
+function isViewingCurrentCycle() {
+  var current = getCycleForDate(new Date());
+  return current.month === viewMonth && current.year === viewYear;
 }
 
 function balanceBeforeMonth(month, year) {
-  var cutoff = new Date(year, month, 1);
+  var cutoff = getCycleStartDate(month, year);
   var sum = 0;
   for (var i = 0; i < data.transactions.length; i++) {
     var tx = data.transactions[i];
     if (tx.type === 'future') continue;
-    var txDate = new Date(tx.date + 'T00:00:00');
+    var txDate = parseDateStr(tx.date);
     if (txDate < cutoff) {
       if (tx.type === 'income') sum += tx.amount;
       else if (tx.type === 'expense') sum -= tx.amount;
@@ -864,7 +923,7 @@ function currentMonthNet(month, year) {
   for (var i = 0; i < data.transactions.length; i++) {
     var tx = data.transactions[i];
     if (tx.type === 'future') continue;
-    if (isInMonth(tx.date, month, year)) {
+    if (isInCycle(tx.date, month, year)) {
       if (tx.type === 'income') sum += tx.amount;
       else if (tx.type === 'expense') sum -= tx.amount;
     }
@@ -884,7 +943,7 @@ function getMonthStats(month, year) {
 
   for (var i = 0; i < data.transactions.length; i++) {
     var tx = data.transactions[i];
-    if (!isInMonth(tx.date, month, year)) continue;
+    if (!isInCycle(tx.date, month, year)) continue;
 
     if (tx.type === 'expense') {
       monthExpenses += tx.amount;
@@ -951,7 +1010,7 @@ function changeMonth(delta) {
 }
 
 function renderMonthLabel(elId) {
-  document.getElementById(elId).textContent = MONTHS[viewMonth] + ' ' + viewYear;
+  document.getElementById(elId).textContent = getCycleLabel(viewMonth, viewYear) + ' ' + viewYear;
 }
 
 function renderHome() {
@@ -1008,45 +1067,47 @@ function renderHome() {
 }
 
 function renderTimeline(stats) {
-  var daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
+  var cycleDays = getCycleDays(viewMonth, viewYear);
   var today = new Date();
-  var isCurrentMonth = today.getMonth() === viewMonth && today.getFullYear() === viewYear;
+  var todayStr = formatDateInput(today.getFullYear(), today.getMonth(), today.getDate());
+  var isCurrentCycle = isViewingCurrentCycle();
   var runningBal = stats.balanceBeforeMonth;
 
-  var txsByDay = {};
+  var txsByDate = {};
   for (var i = 0; i < data.transactions.length; i++) {
     var tx = data.transactions[i];
     if (tx.type === 'future') continue;
-    if (!isInMonth(tx.date, viewMonth, viewYear)) continue;
-    var day = parseInt(tx.date.split('-')[2], 10);
-    if (!txsByDay[day]) txsByDay[day] = [];
-    txsByDay[day].push(tx);
+    if (!isInCycle(tx.date, viewMonth, viewYear)) continue;
+    if (!txsByDate[tx.date]) txsByDate[tx.date] = [];
+    txsByDate[tx.date].push(tx);
   }
 
   var html = '';
-  for (var d = 1; d <= daysInMonth; d++) {
-    if (txsByDay[d]) {
-      for (var j = 0; j < txsByDay[d].length; j++) {
-        var t = txsByDay[d][j];
+  for (var i = 0; i < cycleDays.length; i++) {
+    var cd = cycleDays[i];
+    var dateStr = formatDateInput(cd.year, cd.month, cd.day);
+    if (txsByDate[dateStr]) {
+      for (var j = 0; j < txsByDate[dateStr].length; j++) {
+        var t = txsByDate[dateStr][j];
         if (t.type === 'income') runningBal += t.amount;
         else if (t.type === 'expense') runningBal -= t.amount;
       }
     }
-    var dateObj = new Date(viewYear, viewMonth, d);
+    var dateObj = new Date(cd.year, cd.month, cd.day);
     var dayName = DAY_NAMES[dateObj.getDay()];
-    var isToday = isCurrentMonth && d === today.getDate();
-    var hasTx = txsByDay[d] && txsByDay[d].length > 0;
+    var isToday = isCurrentCycle && dateStr === todayStr;
+    var hasTx = txsByDate[dateStr] && txsByDate[dateStr].length > 0;
     html += '<div class="day-card' + (isToday ? ' today' : '') + '">';
     if (hasTx) html += '<div class="day-dot"></div>';
     html += '<div class="day-name">' + dayName + '</div>';
-    html += '<div class="day-num">' + d + '</div>';
+    html += '<div class="day-num">' + cd.day + '</div>';
     var balStr = runningBal >= 0 ? runningBal.toLocaleString('he-IL') : '-' + Math.abs(runningBal).toLocaleString('he-IL');
     html += '<div class="day-bal">₪' + balStr + '</div>';
     html += '</div>';
   }
   document.getElementById('timeline').innerHTML = html;
 
-  if (isCurrentMonth) {
+  if (isCurrentCycle) {
     var todayCard = document.querySelector('.day-card.today');
     if (todayCard) {
       setTimeout(function() {
@@ -1059,7 +1120,7 @@ function renderTimeline(stats) {
 function renderTxList() {
   var txs = [];
   for (var i = 0; i < data.transactions.length; i++) {
-    if (isInMonth(data.transactions[i].date, viewMonth, viewYear)) {
+    if (isInCycle(data.transactions[i].date, viewMonth, viewYear)) {
       txs.push(data.transactions[i]);
     }
   }
@@ -1120,16 +1181,18 @@ function renderAnalytics() {
     '<div class="summary-card"><div class="label">הכנסות</div><div class="value color-green">' + formatCurrency(stats.totalIncome) + '</div></div>' +
     '<div class="summary-card"><div class="label">נטו</div><div class="value ' + colorClass(stats.currentMonthNet) + '">' + formatCurrency(stats.currentMonthNet) + '</div></div>';
 
-  var daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
+  var cycleDays = getCycleDays(viewMonth, viewYear);
   var dailyExpenses = {};
-  for (var d = 1; d <= daysInMonth; d++) dailyExpenses[d] = 0;
+  for (var ci = 0; ci < cycleDays.length; ci++) {
+    var ckey = formatDateInput(cycleDays[ci].year, cycleDays[ci].month, cycleDays[ci].day);
+    dailyExpenses[ckey] = 0;
+  }
 
   for (var i = 0; i < data.transactions.length; i++) {
     var tx = data.transactions[i];
     if (tx.type !== 'expense') continue;
-    if (!isInMonth(tx.date, viewMonth, viewYear)) continue;
-    var day = parseInt(tx.date.split('-')[2], 10);
-    dailyExpenses[day] += tx.amount;
+    if (!isInCycle(tx.date, viewMonth, viewYear)) continue;
+    if (dailyExpenses[tx.date] !== undefined) dailyExpenses[tx.date] += tx.amount;
   }
 
   var maxExpense = 0;
@@ -1138,9 +1201,11 @@ function renderAnalytics() {
   }
 
   var chartHtml = '';
-  for (var d = 1; d <= daysInMonth; d++) {
-    var h = maxExpense > 0 ? (dailyExpenses[d] / maxExpense * 100) : 0;
-    chartHtml += '<div class="bar-col"><div class="bar" style="height:' + h + '%"></div><div class="bar-label">' + d + '</div></div>';
+  for (var ci = 0; ci < cycleDays.length; ci++) {
+    var cd = cycleDays[ci];
+    var ckey = formatDateInput(cd.year, cd.month, cd.day);
+    var h = maxExpense > 0 ? (dailyExpenses[ckey] / maxExpense * 100) : 0;
+    chartHtml += '<div class="bar-col"><div class="bar" style="height:' + h + '%"></div><div class="bar-label">' + cd.day + '</div></div>';
   }
   document.getElementById('bar-chart').innerHTML = chartHtml;
 
@@ -1148,7 +1213,7 @@ function renderAnalytics() {
   for (var i = 0; i < data.transactions.length; i++) {
     var tx = data.transactions[i];
     if (tx.type !== 'expense') continue;
-    if (!isInMonth(tx.date, viewMonth, viewYear)) continue;
+    if (!isInCycle(tx.date, viewMonth, viewYear)) continue;
     var cid = tx.category || 'unknown';
     catTotals[cid] = (catTotals[cid] || 0) + tx.amount;
   }
@@ -1219,12 +1284,11 @@ function openAddModal(type) {
   document.getElementById('tx-amount').value = '';
   document.getElementById('tx-description').value = '';
   var now = new Date();
-  var defaultDay = (now.getMonth() === viewMonth && now.getFullYear() === viewYear)
-    ? now.getDate()
-    : 1;
-  var maxDay = new Date(viewYear, viewMonth + 1, 0).getDate();
-  if (defaultDay > maxDay) defaultDay = maxDay;
-  document.getElementById('tx-date').value = formatDateInput(viewYear, viewMonth, defaultDay);
+  if (isViewingCurrentCycle()) {
+    document.getElementById('tx-date').value = formatDateInput(now.getFullYear(), now.getMonth(), now.getDate());
+  } else {
+    document.getElementById('tx-date').value = formatDateInput(viewYear, viewMonth, CYCLE_START_DAY);
+  }
   document.getElementById('tx-delete-btn').classList.add('hidden');
 
   updateTypeButtons();
@@ -1365,7 +1429,7 @@ function deleteTransaction() {
 function openGoalModal() {
   var key = monthKey(viewYear, viewMonth);
   var current = data.monthGoals[key];
-  document.getElementById('goal-modal-label').textContent = 'יעד לסוף ' + MONTHS[viewMonth] + ' ' + viewYear;
+  document.getElementById('goal-modal-label').textContent = 'יעד לסוף מחזור ' + getCycleLabel(viewMonth, viewYear) + ' ' + viewYear;
   document.getElementById('goal-input').value = current !== undefined && current !== null ? current : '';
   showModal('goal-modal-backdrop');
 }
@@ -1490,8 +1554,9 @@ function confirmAction() {
 
 loadData();
 var now = new Date();
-viewMonth = now.getMonth();
-viewYear = now.getFullYear();
+var currentCycle = getCycleForDate(now);
+viewMonth = currentCycle.month;
+viewYear = currentCycle.year;
 render();
 </script>
 </body>
